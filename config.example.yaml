@@ -1,0 +1,64 @@
+# shorts_Pipeline configuration
+# Copy to config.yaml and customize
+
+scripting:
+  # Primary: local Ollama (recommended for cost)
+  provider: ollama          # ollama | openai_compatible
+  ollama:
+    base_url: http://localhost:11434
+    model: qwen2.5:7b-instruct   # or gemma3:12b, llama3.2:3b, qwen3:8b etc. Pick what runs well + has good JSON following
+    temperature: 0.7
+    timeout: 120
+
+  # Fallback / alternative (set provider: openai_compatible)
+  openai_compatible:
+    base_url: https://api.groq.com/openai/v1   # e.g. Groq, Together, local vLLM, etc.
+    api_key: ${GROQ_API_KEY}                   # or hardcode for testing (not recommended)
+    model: llama-3.3-70b-versatile             # or deepseek, etc.
+    temperature: 0.7
+
+image_generation:
+  backend: mock                    # mock | comfyui | api_generic | imagine (for this env prototyping)
+  # When using real backends later, add keys / urls here
+  comfyui:
+    base_url: http://127.0.0.1:8188
+    # workflow_id or api specifics
+  api_generic:
+    # Example cheap providers - fill with the current cheapest you find
+    endpoint: https://api.runware.ai/v1   # or fal, etc.
+    api_key: ${IMAGE_API_KEY}
+    model: ""                         # provider specific
+  aspect_ratio: "9:16"
+  width: 1080
+  height: 1920
+  # For consistency: generate a reference/character image first, then condition later scenes on it
+
+video_assembly:
+  motion_mode: ffmpeg_kenburns     # ffmpeg_kenburns | comfyui_i2v | api_i2v
+  output_resolution: [1080, 1920]
+  target_fps: 30
+  default_scene_duration: 4.5
+  # Ken Burns params
+  kenburns:
+    zoom_speed: 0.04               # slow zoom factor
+    pan_amount: 0.03
+    direction: random              # in | out | random
+  # Music
+  music_dir: music                 # place royalty free mp3s here (or leave empty)
+  music_volume: 0.15               # relative to voice (ducking handled in assembly)
+  # Captions (basic for MVP)
+  captions:
+    enabled: true
+    style: big_bold                # big_bold | karaoke (future)
+
+paths:
+  output_dir: outputs
+  images_dir: outputs/images
+  audio_dir: outputs/audio
+  clips_dir: outputs/clips
+  finals_dir: outputs/finals
+  temp_dir: outputs/temp
+
+general:
+  verbose: true
+  seed: null                     # for reproducibility where backends support it
