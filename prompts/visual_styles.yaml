@@ -1,0 +1,30 @@
+cinematic:
+  script_hint: |
+    VISUAL STYLE: Cinematic vertical short. Each scene needs a distinct, dynamic visual
+    that will animate well — characters moving, environments with natural motion (wind,
+    water, particles), camera-friendly compositions. Write detailed motion_prompt per scene
+    describing fluid movement (not static poses).
+  image_suffix: ""
+  reference_scenes: false
+  motion: smooth_i2v
+
+whiteboard:
+  script_hint: |
+    VISUAL STYLE: Whiteboard explainer video. Each scene must show a UNIQUE board state —
+    new marker drawings, diagrams, and bullet points appearing step by step (like a teacher
+    drawing on a whiteboard). Scenes must look VISUALLY DIFFERENT from each other.
+    Use simple marker doodles, arrows, boxes, icons. No photorealistic imagery.
+    motion_prompt should describe drawing appearing or hand writing on board.
+  image_suffix: "whiteboard marker drawing, educational doodle, distinct composition per scene"
+  reference_scenes: false
+  motion: draw_reveal
+
+stick_figure:
+  script_hint: |
+    VISUAL STYLE: Stick-figure explainer (like educational YouTube explainers). Each scene
+    must have a DIFFERENT stick figure pose and speech bubble content. Simple clean background.
+    Vary poses: pointing, thinking, celebrating, explaining. No photorealistic imagery.
+    motion_prompt should describe stick figure gesturing or explaining.
+  image_suffix: "stick figure explainer, simple cartoon, unique pose per scene"
+  reference_scenes: false
+  motion: draw_reveal

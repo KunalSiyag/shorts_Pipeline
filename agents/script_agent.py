@@ -20,6 +20,7 @@ class Scene(BaseModel):
     id: int
     narration: str = Field(..., min_length=5, max_length=400)
     image_prompt: str = Field(..., min_length=20)
+    motion_prompt: str = "slow cinematic push-in"
     duration_hint_sec: float = Field(..., ge=1.5, le=12.0)
     notes: str = ""
 
@@ -27,7 +28,7 @@ class Scene(BaseModel):
 class VideoScript(BaseModel):
     title: str = Field(..., min_length=5, max_length=120)
     hook: str
-    overall_style: str = Field(..., min_length=10)
+    overall_style: str | dict = Field(..., min_length=3)   # allow dict from smaller models
     music_suggestion: str = ""
     scenes: list[Scene] = Field(..., min_items=3, max_items=12)
 
@@ -52,16 +53,31 @@ class ScriptAgent:
     def _get_scripting_cfg(self) -> dict:
         return self.cfg.get("scripting", {})
 
-    def generate(self, topic: str, max_retries: int = 2) -> VideoScript:
+    def generate(self, topic: str, max_retries: int = 2, visual_style: str = "cinematic") -> VideoScript:
         """
         Generate a VideoScript for the given topic.
+        visual_style: cinematic | whiteboard | stick_figure
         """
         system_prompt = self._load_system_prompt()
-        user_prompt = f"Create an engaging short vertical video script about:\n{topic}\n\nRemember: output ONLY valid JSON matching the exact schema."
+        style_hint = self._load_visual_style_hint(visual_style)
+        user_prompt = (
+            f"Create an engaging short vertical video script about:\n{topic}\n\n"
+            f"{style_hint}\n\n"
+            "Remember: output ONLY valid JSON matching the exact schema."
+        )
 
         raw = self._call_llm(system_prompt, user_prompt, max_retries=max_retries)
         script = self._parse_and_validate(raw)
         return script
+
+    def _load_visual_style_hint(self, visual_style: str) -> str:
+        styles_path = Path(__file__).parent.parent / "prompts" / "visual_styles.yaml"
+        if styles_path.exists():
+            with open(styles_path) as f:
+                styles = yaml.safe_load(f) or {}
+            entry = styles.get(visual_style, {})
+            return entry.get("script_hint", "").strip()
+        return ""
 
     def _load_system_prompt(self) -> str:
         prompt_path = Path(__file__).parent.parent / "prompts" / "script_system.txt"
@@ -76,6 +92,9 @@ class ScriptAgent:
 
         if provider == "ollama":
             return self._call_ollama(scripting, system, user, max_retries)
+        elif provider == "grok":
+            # Native Grok (xAI) support - OpenAI compatible
+            return self._call_grok(scripting, system, user, max_retries)
         elif provider == "openai_compatible":
             return self._call_openai_compatible(scripting, system, user, max_retries)
         else:
@@ -113,7 +132,58 @@ class ScriptAgent:
                 last_err = e
                 if attempt < max_retries:
                     continue
-        raise RuntimeError(f"Ollama call failed after retries: {last_err}")
+
+        # Make error messages helpful for common Ollama problems
+        err_str = str(last_err)
+        hint = ""
+        if "404" in err_str or "Not Found" in err_str:
+            hint = (
+                "\n\nPossible fixes:\n"
+                "1. Make sure Ollama server is running:  `ollama serve`\n"
+                "2. Pull the model:  `ollama pull " + (ollama_cfg.get("model") or "qwen2.5:3b") + "`\n"
+                "3. Check the model name in config.yaml (use a small model like qwen2.5:3b on low VRAM GPUs)"
+            )
+        elif "Connection" in err_str or "refused" in err_str.lower():
+            hint = "\n\nOllama server is not running. Start it with: `ollama serve`"
+        raise RuntimeError(f"Ollama call failed: {err_str}{hint}")
+
+    def _call_grok(self, scripting_cfg: dict, system: str, user: str, max_retries: int) -> str:
+        """Native support for Grok / xAI API (OpenAI compatible)."""
+        grok_cfg = scripting_cfg.get("grok", {})
+        base_url = grok_cfg.get("base_url", "https://api.x.ai/v1").rstrip("/")
+        api_key = grok_cfg.get("api_key") or os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY") or ""
+        model = grok_cfg.get("model", "grok-2-1212")  # or grok-beta, etc. Check xAI console for current
+        temperature = grok_cfg.get("temperature", 0.7)
+
+        if not api_key:
+            api_key = self._resolve_env_var(grok_cfg.get("api_key", ""))
+
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        url = f"{base_url}/chat/completions"
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+            "stream": False,
+        }
+
+        last_err = None
+        for attempt in range(max_retries + 1):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=120)
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                return content.strip()
+            except Exception as e:
+                last_err = e
+                if attempt < max_retries:
+                    continue
+        raise RuntimeError(f"Grok (xAI) call failed: {last_err}\n\nMake sure you have XAI_API_KEY set and access to Grok models via xAI console.")
 
     def _call_openai_compatible(self, scripting_cfg: dict, system: str, user: str, max_retries: int) -> str:
         oc = scripting_cfg.get("openai_compatible", {})
@@ -192,6 +262,15 @@ class ScriptAgent:
             scene.id = i + 1  # enforce sequential ids
             scene.narration = scene.narration.strip()
             scene.image_prompt = scene.image_prompt.strip()
+
+        # Normalize overall_style: some small models return it as an object
+        if isinstance(script.overall_style, dict):
+            style_parts = []
+            for k, v in script.overall_style.items():
+                if isinstance(v, list):
+                    v = ", ".join(map(str, v))
+                style_parts.append(f"{k}: {v}")
+            script.overall_style = " | ".join(style_parts) or "Cinematic vertical video style"
 
         return script
 

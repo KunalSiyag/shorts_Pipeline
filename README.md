@@ -77,6 +77,26 @@ Topic / Niche / Prompt
    outputs/final_*.mp4
 ```
 
+## Web GUI (Streamlit)
+
+A full graphical interface is included so you don't have to use the CLI.
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+**What you can do in the GUI:**
+- Enter any topic and generate a complete script using your local LLM
+- Review and edit narration + image prompts per scene
+- Generate (or re-generate) all scene images
+- Assemble the final video with one click (TTS + motion + captions)
+- Preview images and the finished vertical MP4 directly in the browser
+- Load previous scripts/videos from the `outputs/` folder
+- Control key settings in the sidebar (model, voice, caption size, image backend, etc.)
+
+The GUI calls the exact same `ScriptAgent`, `ImageAgent`, and `VideoAgent` that the CLI uses, so behavior is identical.
+
 ## Project Structure (current)
 
 ```
@@ -122,12 +142,23 @@ shorts_Pipeline/
    python pipeline.py --topic "5 mind-blowing facts about black holes" --output outputs/test1.mp4
    ```
 
-5. Later: Swap in real image generation (see below).
+5. **(Recommended)** Launch the GUI to control everything visually:
+   ```bash
+   pip install -r requirements.txt
+   streamlit run app.py
+   ```
+   The Streamlit app lets you:
+   - Type a topic and generate/edit scripts
+   - Generate scene images (mock by default)
+   - Assemble the final video with live preview
+   - Load previous runs
+
+6. Later: Swap in real image generation (see below).
 
 ## Image Generation Options (plug into image_agent)
 
 - **Mock** (default for testing pipeline): Colored vertical images with scene text. Lets you validate the full flow instantly and for free.
-- **Local ComfyUI**: Run ComfyUI separately (with Flux schnell or your favorite fast model). Image agent calls its API. Best for privacy + eventual zero marginal.
+- **Local ComfyUI + Flux Schnell (recommended for your 4GB RTX 3050)**: Full local open-source generation. Follow the one-by-one setup below. Use quantized GGUF for 4GB VRAM. Supports reference images for consistency.
 - **Cheap APIs** (recommended for speed + your 4GB GPU):
   - Runware.ai (frequently cited as one of the absolute cheapest)
   - fal.ai (excellent for Flux + Wan models)

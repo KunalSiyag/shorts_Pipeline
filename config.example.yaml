@@ -6,9 +6,16 @@ scripting:
   provider: ollama          # ollama | openai_compatible
   ollama:
     base_url: http://localhost:11434
-    model: qwen2.5:7b-instruct   # or gemma3:12b, llama3.2:3b, qwen3:8b etc. Pick what runs well + has good JSON following
+    model: qwen2.5:3b   # Recommended for low VRAM (4-8GB). For better quality on stronger hardware use qwen2.5:7b or 14b. Other good small options: gemma2:2b, phi4-mini, llama3.2:3b
     temperature: 0.7
     timeout: 120
+
+  # Grok / xAI (recommended if you have Premium access)
+  grok:
+    base_url: https://api.x.ai/v1
+    api_key: ${XAI_API_KEY}
+    model: grok-2-1212   # Check https://console.x.ai for current models (grok-2, grok-beta, etc.)
+    temperature: 0.7
 
   # Fallback / alternative (set provider: openai_compatible)
   openai_compatible:
@@ -18,26 +25,49 @@ scripting:
     temperature: 0.7
 
 image_generation:
-  backend: mock                    # mock | comfyui | api_generic | imagine (for this env prototyping)
-  # When using real backends later, add keys / urls here
+  backend: pollinations            # pollinations (free) | mock | comfyui | fal | runware
+  pollinations:
+    base_url: https://image.pollinations.ai/prompt
+    model: flux
+    enhance: true
   comfyui:
     base_url: http://127.0.0.1:8188
-    # workflow_id or api specifics
-  api_generic:
-    # Example cheap providers - fill with the current cheapest you find
-    endpoint: https://api.runware.ai/v1   # or fal, etc.
-    api_key: ${IMAGE_API_KEY}
-    model: ""                         # provider specific
+    checkpoint: "flux1-schnell.safetensors"   # ← Put your actual model filename here (Flux, SDXL, etc.)
+    steps: 4
+    cfg: 1.0
+    sampler_name: "euler"
+    scheduler: "simple"
+    negative_prompt: "blurry, low quality, text, watermark"
+    denoise: 0.65
+    # ComfyUI explanation:
+    # This is a FULL local image/video generator (not just a connector).
+    # It runs open-source models (Flux, SDXL, video models...) directly on your GPU for free.
+    # Download ComfyUI from https://github.com/comfyanonymous/ComfyUI
+    # Put models in ComfyUI/models/checkpoints (or unet for Flux)
+    # Our code just talks to its API to send prompts and get results.
+  fal:
+    model: fal-ai/flux/schnell       # ~$0.006/image at 1080x1920. Set FAL_KEY env var.
+  runware:
+    model: runware:101@1             # Very cheap. Set RUNWARE_API_KEY env var.
   aspect_ratio: "9:16"
   width: 1080
   height: 1920
   # For consistency: generate a reference/character image first, then condition later scenes on it
 
 video_assembly:
-  motion_mode: ffmpeg_kenburns     # ffmpeg_kenburns | comfyui_i2v | api_i2v
+  motion_mode: smooth_i2v          # smooth_i2v | ffmpeg_kenburns | draw_reveal | hybrid
+  i2v_fallback: false
   output_resolution: [1080, 1920]
   target_fps: 30
   default_scene_duration: 4.5
+  fal_i2v:
+    provider: fal
+    model: fal-ai/wan/v2.2-5b/image-to-video   # ~$0.05–0.15/clip. Set FAL_KEY env var.
+    resolution: 480p
+    aspect_ratio: "9:16"
+    num_frames: 81
+    fps: 16
+    use_interpolation: true
   # Ken Burns params
   kenburns:
     zoom_speed: 0.04               # slow zoom factor
@@ -46,10 +76,14 @@ video_assembly:
   # Music
   music_dir: music                 # place royalty free mp3s here (or leave empty)
   music_volume: 0.15               # relative to voice (ducking handled in assembly)
-  # Captions (basic for MVP)
+  # Captions
+  # We use clean transparent subtitles (no big background box) by default.
+  # Text is large, bottom-positioned, with thick outline for readability.
+  # The assembly code now limits to ~2 short lines so they don't dominate the frame.
   captions:
     enabled: true
-    style: big_bold                # big_bold | karaoke (future)
+    fontsize: 58                   # larger = more impact, but keep lines short via script
+    style: clean_outline           # clean_outline (transparent bg + outline) | box (old opaque) | karaoke (future)
 
 paths:
   output_dir: outputs

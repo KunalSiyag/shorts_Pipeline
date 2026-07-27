@@ -1,16 +1,9 @@
 """
 Video Assembly Agent
 
-Takes:
-- A VideoScript
-- List of scene images (same order)
-- Generated audio (or generates it)
-
-Produces a final vertical short using the cheapest possible high-retention techniques:
-- Ken Burns motion on images (ffmpeg)
-- Per-scene or full audio
-- Simple but effective captions
-- Optional royalty-free music bed
+Produces final vertical shorts with:
+- smooth_i2v: AI-generated motion clips (fal Wan — recommended)
+- ffmpeg_kenburns / draw_reveal: static image effects (legacy / free fallback)
 """
 from __future__ import annotations
 
@@ -18,7 +11,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-# Ensure we can import sibling utils when running as script or -c
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -28,11 +20,13 @@ import yaml
 from utils.ffmpeg_utils import (
     check_ffmpeg,
     create_kenburns_clip,
+    create_reveal_clip,
     create_srt_for_scenes,
     concat_clips,
     mix_music,
     burn_simple_captions,
     get_audio_duration,
+    mux_motion_video_with_audio,
 )
 from utils.tts import generate_tts
 
@@ -45,7 +39,8 @@ class VideoAgent:
         self.video_cfg = self.cfg.get("video_assembly", {})
         self.ken_cfg = self.video_cfg.get("kenburns", {})
         self.captions_cfg = self.video_cfg.get("captions", {})
-        self.motion_mode = self.video_cfg.get("motion_mode", "ffmpeg_kenburns")
+        self.motion_mode = self.video_cfg.get("motion_mode", "smooth_i2v")
+        self.i2v_cfg = self.video_cfg.get("fal_i2v", {})
 
     def _load_config(self) -> dict:
         p = self.config_path
@@ -56,17 +51,17 @@ class VideoAgent:
                 return yaml.safe_load(f) or {}
         return {}
 
+    def _uses_smooth_i2v(self) -> bool:
+        return self.motion_mode in ("smooth_i2v", "api_i2v")
+
     def assemble(
         self,
-        script,                      # VideoScript instance
+        script,
         image_paths: list[Path],
         output_video: str | Path,
         voice: str = "en-US-AriaNeural",
         add_music: bool = True,
     ) -> Path:
-        """
-        Full assembly pipeline for one short.
-        """
         if not check_ffmpeg():
             raise RuntimeError("ffmpeg / ffprobe not found on PATH. Install ffmpeg to use video assembly.")
 
@@ -79,7 +74,6 @@ class VideoAgent:
         for d in (finals_dir, clips_dir, audio_dir, temp_dir):
             d.mkdir(parents=True, exist_ok=True)
 
-        # 1. Generate per-scene audio (or could do one big audio + timestamps)
         scene_audios: list[Path] = []
         scene_durations: list[float] = []
 
@@ -88,51 +82,112 @@ class VideoAgent:
             aud_path = audio_dir / f"scene_{scene.id:02d}.mp3"
             generate_tts(scene.narration, aud_path, voice=voice)
             dur = get_audio_duration(aud_path)
-            # respect the script hint but use real audio length (more accurate)
             scene_durations.append(max(2.0, dur))
             scene_audios.append(aud_path)
 
-        # 2. Create motion clips per scene
-        print("[video] Creating Ken Burns clips...")
+        use_i2v = self._uses_smooth_i2v() or self.motion_mode == "hybrid"
+        allow_fallback = self.video_cfg.get("i2v_fallback", False)
+
+        if self._uses_smooth_i2v():
+            print(f"[video] Generating smooth AI motion clips (fal Wan I2V)...")
+        elif use_i2v:
+            print(f"[video] Creating motion clips (mode={self.motion_mode})...")
+        else:
+            print(f"[video] Creating clips (mode={self.motion_mode})...")
+
         clip_paths: list[Path] = []
+        raw_i2v_dir = temp_dir / "i2v_raw"
+        raw_i2v_dir.mkdir(parents=True, exist_ok=True)
+        res = self.video_cfg.get("output_resolution", [1080, 1920])
+
         for i, (scene, img, aud) in enumerate(zip(script.scenes, image_paths, scene_audios)):
             clip = clips_dir / f"clip_{scene.id:02d}.mp4"
-            dur = scene_durations[i]
             direction = scene.notes.lower() if "zoom" in (scene.notes or "").lower() else "random"
 
-            create_kenburns_clip(
-                image_path=img,
-                audio_path=aud,
-                output_path=clip,
-                duration=dur,
-                width=self.video_cfg.get("output_resolution", [1080, 1920])[0],
-                height=self.video_cfg.get("output_resolution", [1080, 1920])[1],
-                zoom_speed=self.ken_cfg.get("zoom_speed", 0.035),
-                direction=direction,
-                fps=self.video_cfg.get("target_fps", 30),
+            scene_uses_i2v = use_i2v and (
+                self._uses_smooth_i2v()
+                or self.motion_mode == "api_i2v"
+                or (self.motion_mode == "hybrid" and "i2v" in (scene.notes or "").lower())
             )
+
+            if scene_uses_i2v:
+                from utils.i2v import build_motion_prompt, generate_i2v
+
+                motion_prompt = build_motion_prompt(scene)
+                raw_i2v = raw_i2v_dir / f"scene_{scene.id:02d}_raw.mp4"
+                try:
+                    generate_i2v(
+                        image_path=Path(img),
+                        prompt=motion_prompt,
+                        output_path=raw_i2v,
+                        cfg={**self.i2v_cfg, "provider": "fal"},
+                    )
+                    mux_motion_video_with_audio(
+                        raw_i2v, aud, clip,
+                        width=res[0], height=res[1],
+                        fps=self.video_cfg.get("target_fps", 30),
+                        smooth=True,
+                    )
+                    print(f"  Scene {scene.id}: smooth AI video ✓")
+                except Exception as e:
+                    if not allow_fallback:
+                        raise RuntimeError(
+                            f"Smooth video failed for scene {scene.id}: {e}\n"
+                            "Set FAL_KEY or enable i2v_fallback in config to use static images."
+                        ) from e
+                    print(f"  Scene {scene.id}: I2V failed ({e}), falling back to static motion")
+                    scene_uses_i2v = False
+
+            if not scene_uses_i2v:
+                if self.motion_mode == "draw_reveal":
+                    reveal_dir = "top_to_bottom" if i % 2 else "left_to_right"
+                    create_reveal_clip(
+                        image_path=img, audio_path=aud, output_path=clip,
+                        duration=scene_durations[i], width=res[0], height=res[1],
+                        fps=self.video_cfg.get("target_fps", 30), direction=reveal_dir,
+                    )
+                else:
+                    create_kenburns_clip(
+                        image_path=img, audio_path=aud, output_path=clip,
+                        duration=scene_durations[i], width=res[0], height=res[1],
+                        zoom_speed=self.ken_cfg.get("zoom_speed", 0.035),
+                        direction=direction, fps=self.video_cfg.get("target_fps", 30),
+                    )
             clip_paths.append(clip)
 
-        # 3. Concat raw clips
         raw_concat = temp_dir / f"{output_video.stem}_concat.mp4"
-        concat_clips(clip_paths, raw_concat)
+        concat_clips(clip_paths, raw_concat, scene_durations=scene_durations)
 
-        # 4. Create captions
         srt_path = temp_dir / f"{output_video.stem}.srt"
         create_srt_for_scenes(script.scenes, scene_durations, srt_path)
 
-        # 5. Burn captions
         captioned = temp_dir / f"{output_video.stem}_captioned.mp4"
-        burn_simple_captions(raw_concat, srt_path, captioned)
+        cap_cfg = self.captions_cfg or {}
+        style_choice = cap_cfg.get("style", "clean_outline")
+        if style_choice == "box":
+            custom_style = (
+                "FontName=DejaVuSans-Bold,Fontsize=42,PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,BorderStyle=3,Outline=2,Shadow=1,"
+                "Alignment=2,MarginV=90"
+            )
+        else:
+            fontsize = cap_cfg.get("fontsize", 32)
+            margin_v = cap_cfg.get("margin_v", 200)
+            margin_lr = cap_cfg.get("margin_lr", 70)
+            custom_style = (
+                f"FontName=DejaVuSans-Bold,Fontsize={fontsize},PrimaryColour=&H00FFFFFF,"
+                "OutlineColour=&H00000000,BorderStyle=1,Outline=3,Shadow=0,"
+                f"Alignment=2,MarginV={margin_v},MarginL={margin_lr},MarginR={margin_lr}"
+            )
+        burn_simple_captions(raw_concat, srt_path, captioned, style=custom_style)
 
-        # 6. Mix music if available
         final = output_video
         music_dir = Path(self.video_cfg.get("music_dir", "music"))
         music_file: Optional[Path] = None
         if add_music and music_dir.exists():
             candidates = sorted(music_dir.glob("*.mp3")) + sorted(music_dir.glob("*.wav"))
             if candidates:
-                music_file = candidates[0]  # simple: take first one. Later: smarter selection or loop
+                music_file = candidates[0]
 
         mix_music(
             video_path=captioned,

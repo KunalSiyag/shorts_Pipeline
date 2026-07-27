@@ -4,8 +4,12 @@ requests>=2.31
 edge-tts>=6.1.0
 pillow>=10.0
 python-dotenv>=1.0
+streamlit>=1.32.0
+fal-client>=0.7.0
+runware>=0.4.0
 # For future / optional:
 # litellm>=1.0
 # openai>=1.0
+# groq>=0.5
 # faster-whisper>=1.0  # for caption alignment / timing improvement
 # moviepy>=1.0.3
